@@ -1,0 +1,10 @@
+todo
+----
+* SsTable features
+  * delete value -> ("row") metadata
+
+  * compaction
+
+  * Bloom filter
+  * guard against incompletely written
+  * verify consistency -> hash
