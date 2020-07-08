@@ -41,6 +41,11 @@ impl SsTable {
             }
         }
 
+        //TODO marker to handle crash during indexing robustly
+        //TODO hash to verify integrity
+        index_file.flush();
+        data_file.flush();
+
         SsTable::open(config, schema, &name_base)
     }
 
