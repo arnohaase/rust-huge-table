@@ -5,11 +5,7 @@ mod sstable;
 mod table;
 
 use std::collections::HashMap;
-use std::ops::Deref;
 
-
-struct A {
-}
 
 
 fn main() {

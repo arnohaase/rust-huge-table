@@ -13,6 +13,7 @@ use uuid::Uuid;
 use crate::prelude::*;
 use crate::primitives::*;
 
+#[derive(Clone)]
 pub enum ColumnType {
     Boolean,
     Int,
@@ -20,13 +21,24 @@ pub enum ColumnType {
     Text,
 }
 
+#[derive(Clone)]
 pub struct ColumnSchema {
     pub col_id: u32,
     pub name: String,
     pub tpe: ColumnType,
     pub pk_spec: PrimaryKeySpec,
 }
+impl ColumnSchema {
+    fn is_primary_key(&self) -> bool {
+        match self.pk_spec {
+            PrimaryKeySpec::PartitionKey => true,
+            PrimaryKeySpec::ClusterKey(_) => true,
+            PrimaryKeySpec::Regular => false,
+        }
+    }
+}
 
+#[derive(Clone)]
 pub enum PrimaryKeySpec {
     PartitionKey,
     ClusterKey(bool),
@@ -41,28 +53,26 @@ pub struct TableSchema {
 }
 
 impl TableSchema {
+    pub fn new(name: &str, table_id: &Uuid, columns: Vec<ColumnSchema>) -> TableSchema {
+        let pk_columns = columns
+            .iter()
+            .filter(|c| c.is_primary_key())
+            .map(|c|c.clone())
+            .collect();
+
+        TableSchema {
+            name: name.to_string(),
+            table_id: table_id.clone(),
+            columns,
+            pk_columns,
+        }
+    }
+
     pub fn column(&self, col_id: u32) -> HtResult<&ColumnSchema> {
         match self.columns.iter().find(|c| c.col_id == col_id) {
             Some(c) => Ok(c),
-            None => Err(HtError::FileIntegrity("invalid column id".to_string())),
+            None => Err(HtError::Misc),
         }
-    }
-}
-
-pub struct TableConfig {
-    base_folder: PathBuf,
-}
-
-impl TableConfig {
-    pub fn new_file(&self, name_base: &str, extension: &str, writeable: bool) -> std::io::Result<File> {
-        let mut path = self.base_folder.clone();
-        path.push(format!("{}.{}", name_base, extension));
-
-        OpenOptions::new()
-            .create(writeable)
-            .write(writeable)
-            .read(true)
-            .open(&path)
     }
 }
 
@@ -257,4 +267,56 @@ pub enum ColumnValue<'a> {
     Int(i32),
     BigInt(i64),
     Text(&'a str),
+}
+
+
+#[cfg(test)]
+mod test {
+    use crate::table::{TableSchema, ColumnSchema, ColumnType, PrimaryKeySpec};
+    use uuid::Uuid;
+    use crate::prelude::HtError;
+
+    #[test]
+    pub fn test_table_schema() {
+        let table_schema = TableSchema::new(
+            "my_table",
+            &Uuid::new_v4(),
+            vec!(
+                ColumnSchema {
+                    col_id: 0,
+                    name: "pa_key".to_string(),
+                    tpe: ColumnType::BigInt,
+                    pk_spec: PrimaryKeySpec::PartitionKey
+                },
+                ColumnSchema {
+                    col_id: 33,
+                    name: "cl_key_1".to_string(),
+                    tpe: ColumnType::Int,
+                    pk_spec: PrimaryKeySpec::ClusterKey(true)
+                },
+                ColumnSchema {
+                    col_id: 22,
+                    name: "cl_key_2".to_string(),
+                    tpe: ColumnType::Text,
+                    pk_spec: PrimaryKeySpec::ClusterKey(false)
+                },
+                ColumnSchema {
+                    col_id: 11,
+                    name: "regular".to_string(),
+                    tpe: ColumnType::Boolean,
+                    pk_spec: PrimaryKeySpec::Regular
+                },
+            ));
+
+
+        assert_eq!(&table_schema.pk_columns.iter().map(|c|&c.name).collect::<Vec<&String>>(),
+                   &vec!("pa_key", "cl_key_1", "cl_key_2"));
+
+        assert_eq!(table_schema.column(0).unwrap().name, "pa_key");
+        assert_eq!(table_schema.column(33).unwrap().name, "cl_key_1");
+        assert_eq!(table_schema.column(22).unwrap().name, "cl_key_2");
+        assert_eq!(table_schema.column(11).unwrap().name, "regular");
+
+        assert!(table_schema.column(1).is_err());
+    }
 }
