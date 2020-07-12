@@ -82,8 +82,8 @@ impl TableSchema {
 
 /// A wrapper around (and handle to) a byte buffer containing a row's raw data.
 pub struct RowData<'a> {
-    schema: Arc<TableSchema>,
-    buf: &'a [u8],
+    pub schema: Arc<TableSchema>,
+    pub buf: &'a [u8],
 }
 
 impl<'a> RowData<'a> {
@@ -124,6 +124,18 @@ impl<'a> RowData<'a> {
         RowFlags {
             flags: self.buf[0]
         }
+    }
+
+    /// This is not very efficient and intended for testing and debugging
+    pub fn read_col_by_id(&self, col_id: u32) -> Option<ColumnData> {
+        let mut offs = self.offs_start_column_data();
+        while offs < self.buf.len() {
+            let candidate = self.read_col(&mut offs);
+            if candidate.col_id == col_id {
+                return Some(candidate);
+            }
+        }
+        None
     }
 
     fn read_col(&self, offs: &mut usize) -> ColumnData {
@@ -306,6 +318,7 @@ pub enum ColumnValue<'a> {
 
 #[cfg(test)]
 mod test {
+    use std::cmp::Ordering;
     use std::sync::Arc;
 
     use uuid::Uuid;
@@ -313,7 +326,6 @@ mod test {
     use crate::prelude::HtError;
     use crate::primitives::DecodePrimitives;
     use crate::table::{ColumnData, ColumnFlags, ColumnSchema, ColumnType, ColumnValue, DetachedRowData, PrimaryKeySpec, RowFlags, TableSchema};
-    use std::cmp::Ordering;
 
     fn table_schema() -> TableSchema {
         TableSchema::new(
@@ -381,7 +393,7 @@ mod test {
         }
     }
 
-    fn col3_data<'a> (v: &'a str) -> ColumnData<'a> {
+    fn col3_data<'a>(v: &'a str) -> ColumnData<'a> {
         ColumnData {
             col_id: 22,
             flags: ColumnFlags::create(false),
@@ -471,7 +483,7 @@ mod test {
             let table_schema = Arc::new(table_schema());
             let flags = RowFlags::create(true);
             DetachedRowData::assemble(&table_schema, flags,
-                                                &vec!(col1_data(v1), col2_data(v2), col3_data(v3), col4_data(v4))
+                                      &vec!(col1_data(v1), col2_data(v2), col3_data(v3), col4_data(v4)),
             ).unwrap()
         }
 
