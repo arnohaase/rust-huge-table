@@ -4,6 +4,7 @@ use std::fs::{File, OpenOptions};
 use std::io::{Seek, SeekFrom, Write};
 use std::mem::size_of;
 use std::path::PathBuf;
+use std::ptr::NonNull;
 use std::slice::from_raw_parts;
 use std::sync::Arc;
 
@@ -13,7 +14,7 @@ use uuid::Uuid;
 use crate::prelude::*;
 use crate::primitives::*;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum ColumnType {
     Boolean,
     Int,
@@ -21,13 +22,14 @@ pub enum ColumnType {
     Text,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ColumnSchema {
     pub col_id: u32,
     pub name: String,
     pub tpe: ColumnType,
     pub pk_spec: PrimaryKeySpec,
 }
+
 impl ColumnSchema {
     fn is_primary_key(&self) -> bool {
         match self.pk_spec {
@@ -38,13 +40,14 @@ impl ColumnSchema {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum PrimaryKeySpec {
     PartitionKey,
     ClusterKey(bool),
     Regular,
 }
 
+#[derive(Debug)]
 pub struct TableSchema {
     pub name: String,
     pub table_id: Uuid,
@@ -57,7 +60,7 @@ impl TableSchema {
         let pk_columns = columns
             .iter()
             .filter(|c| c.is_primary_key())
-            .map(|c|c.clone())
+            .map(|c| c.clone())
             .collect();
 
         TableSchema {
@@ -71,7 +74,7 @@ impl TableSchema {
     pub fn column(&self, col_id: u32) -> HtResult<&ColumnSchema> {
         match self.columns.iter().find(|c| c.col_id == col_id) {
             Some(c) => Ok(c),
-            None => Err(HtError::Misc),
+            None => Err(HtError::misc("column not found")),
         }
     }
 }
@@ -84,8 +87,7 @@ pub struct RowData<'a> {
 }
 
 impl<'a> RowData<'a> {
-    pub fn from_view<'b>(schema: &Arc<TableSchema>, buf: &'b [u8])
-                         -> RowData<'b> {
+    pub fn from_view<'b>(schema: &Arc<TableSchema>, buf: &'b [u8]) -> RowData<'b> {
         RowData {
             schema: schema.clone(),
             buf,
@@ -105,6 +107,7 @@ impl<'a> RowData<'a> {
         //TODO valid row flags
 
         //TODO full cluster key is present (if flag is set) or only leading columns and no regular columns
+        //TODO ... and not null
 
         Ok(())
     }
@@ -125,14 +128,14 @@ impl<'a> RowData<'a> {
 
     fn read_col(&self, offs: &mut usize) -> ColumnData {
         let col_id = self.buf.decode_varint_u32(offs);
-        let col_flags = ColumnFlags {flags: self.buf[*offs]};
+        let col_flags = ColumnFlags { flags: self.buf[*offs] };
         *offs += 1;
 
         if col_flags.is_null() {
             return ColumnData {
                 col_id,
                 flags: col_flags,
-                value: None
+                value: None,
             };
         }
 
@@ -146,16 +149,20 @@ impl<'a> RowData<'a> {
         ColumnData {
             col_id,
             flags: col_flags,
-            value: Some(col_data)
+            value: Some(col_data),
         }
+    }
+
+    fn offs_start_column_data(&self) -> usize {
+        1usize
     }
 
     pub fn compare_by_pk(&self, other: &RowData) -> Ordering {
         assert!(self.flags().has_full_cluster_key());
         assert!(other.flags().has_full_cluster_key());
 
-        let mut offs_self = 1usize; // start of column data
-        let mut offs_other = 1usize; // start of column data
+        let mut offs_self = self.offs_start_column_data();
+        let mut offs_other = other.offs_start_column_data();
 
         for col_meta in &self.schema.columns {
             let desc = match col_meta.pk_spec {
@@ -176,7 +183,7 @@ impl<'a> RowData<'a> {
             };
 
             match cmp {
-                Ordering::Equal => {},
+                Ordering::Equal => {}
                 _ if desc => return cmp.reverse(),
                 _ => return cmp
             }
@@ -206,13 +213,13 @@ impl DetachedRowData {
             //TODO verify that pk columns go first and are in schema order
 
             if col.flags.is_null() != col.value.is_none() {
-                return Err(HtError::Misc);
+                return Err(HtError::misc("column not null flag mismatch"));
             }
 
             //TODO verify that pk columns can not be null - absent is ok for incomplete rows, but explicit values of null are not
 
             match col.value {
-                None => {},
+                None => {}
                 Some(ColumnValue::Boolean(v)) => buf.encode_bool(v)?,
                 Some(ColumnValue::Int(v)) => buf.encode_varint_i32(v)?,
                 Some(ColumnValue::BigInt(v)) => buf.encode_varint_i64(v)?,
@@ -226,29 +233,56 @@ impl DetachedRowData {
         })
     }
 
-    pub fn as_row_data(&self) -> RowData {
+    pub fn row_data_view(&self) -> RowData {
         RowData::from_view(&self.schema, &self.buf)
     }
 }
 
-#[derive(Copy,Clone)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct RowFlags {
     flags: u8,
 }
+
 impl RowFlags {
     const FULL_CLUSTER_KEY: u8 = 1;
+
+    pub fn create(has_full_cluster_key: bool) -> RowFlags {
+        let mut flags = 0;
+
+        if has_full_cluster_key {
+            flags |= RowFlags::FULL_CLUSTER_KEY;
+        }
+
+        RowFlags { flags }
+    }
 
     pub fn has_full_cluster_key(&self) -> bool {
         self.flags & RowFlags::FULL_CLUSTER_KEY != 0
     }
 }
 
-
+#[derive(Debug, Eq, PartialEq)]
 pub struct ColumnFlags {
     flags: u8,
 }
+
 impl ColumnFlags {
     const NULL_VALUE: u8 = 1;
+
+    #[inline]
+    pub fn create(is_null: bool) -> ColumnFlags {
+        let mut flags = 0;
+        if is_null {
+            flags |= ColumnFlags::NULL_VALUE;
+        }
+
+        ColumnFlags { flags }
+    }
+
+
+    pub fn with_null(&self) -> ColumnFlags {
+        ColumnFlags { flags: self.flags | ColumnFlags::NULL_VALUE }
+    }
 
     pub fn is_null(&self) -> bool {
         self.flags & ColumnFlags::NULL_VALUE != 0
@@ -261,7 +295,7 @@ pub struct ColumnData<'a> {
     pub value: Option<ColumnValue<'a>>,
 }
 
-#[derive(Copy, Clone, PartialOrd, Ord, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialOrd, Ord, PartialEq, Eq)]
 pub enum ColumnValue<'a> {
     Boolean(bool),
     Int(i32),
@@ -272,51 +306,213 @@ pub enum ColumnValue<'a> {
 
 #[cfg(test)]
 mod test {
-    use crate::table::{TableSchema, ColumnSchema, ColumnType, PrimaryKeySpec};
-    use uuid::Uuid;
-    use crate::prelude::HtError;
+    use std::sync::Arc;
 
-    #[test]
-    pub fn test_table_schema() {
-        let table_schema = TableSchema::new(
+    use uuid::Uuid;
+
+    use crate::prelude::HtError;
+    use crate::primitives::DecodePrimitives;
+    use crate::table::{ColumnData, ColumnFlags, ColumnSchema, ColumnType, ColumnValue, DetachedRowData, PrimaryKeySpec, RowFlags, TableSchema};
+    use std::cmp::Ordering;
+
+    fn table_schema() -> TableSchema {
+        TableSchema::new(
             "my_table",
             &Uuid::new_v4(),
             vec!(
                 ColumnSchema {
                     col_id: 0,
-                    name: "pa_key".to_string(),
+                    name: "part_key".to_string(),
                     tpe: ColumnType::BigInt,
-                    pk_spec: PrimaryKeySpec::PartitionKey
+                    pk_spec: PrimaryKeySpec::PartitionKey,
                 },
                 ColumnSchema {
                     col_id: 33,
                     name: "cl_key_1".to_string(),
                     tpe: ColumnType::Int,
-                    pk_spec: PrimaryKeySpec::ClusterKey(true)
+                    pk_spec: PrimaryKeySpec::ClusterKey(false),
                 },
                 ColumnSchema {
                     col_id: 22,
                     name: "cl_key_2".to_string(),
                     tpe: ColumnType::Text,
-                    pk_spec: PrimaryKeySpec::ClusterKey(false)
+                    pk_spec: PrimaryKeySpec::ClusterKey(true),
                 },
                 ColumnSchema {
                     col_id: 11,
                     name: "regular".to_string(),
                     tpe: ColumnType::Boolean,
-                    pk_spec: PrimaryKeySpec::Regular
+                    pk_spec: PrimaryKeySpec::Regular,
                 },
-            ));
+            ))
+    }
 
+    #[test]
+    pub fn test_table_schema() {
+        let table_schema = table_schema();
 
-        assert_eq!(&table_schema.pk_columns.iter().map(|c|&c.name).collect::<Vec<&String>>(),
-                   &vec!("pa_key", "cl_key_1", "cl_key_2"));
+        assert_eq!(&table_schema.pk_columns
+            .iter()
+            .map(|c| &c.name)
+            .collect::<Vec<&String>>(),
+                   &vec!("part_key", "cl_key_1", "cl_key_2"));
 
-        assert_eq!(table_schema.column(0).unwrap().name, "pa_key");
+        assert_eq!(table_schema.column(0).unwrap().name, "part_key");
         assert_eq!(table_schema.column(33).unwrap().name, "cl_key_1");
         assert_eq!(table_schema.column(22).unwrap().name, "cl_key_2");
         assert_eq!(table_schema.column(11).unwrap().name, "regular");
 
         assert!(table_schema.column(1).is_err());
+    }
+
+    fn col1_data(v: i64) -> ColumnData<'static> {
+        ColumnData {
+            col_id: 0,
+            flags: ColumnFlags::create(false),
+            value: Some(ColumnValue::BigInt(v)),
+        }
+    }
+
+    fn col2_data(v: i32) -> ColumnData<'static> {
+        ColumnData {
+            col_id: 33,
+            flags: ColumnFlags::create(false),
+            value: Some(ColumnValue::Int(v)),
+        }
+    }
+
+    fn col3_data<'a> (v: &'a str) -> ColumnData<'a> {
+        ColumnData {
+            col_id: 22,
+            flags: ColumnFlags::create(false),
+            value: Some(ColumnValue::Text(v)),
+        }
+    }
+
+    fn col4_data(v: Option<bool>) -> ColumnData<'static> {
+        ColumnData {
+            col_id: 11,
+            flags: ColumnFlags::create(v.is_none()),
+            value: v.map(|b| ColumnValue::Boolean(b)),
+        }
+    }
+
+    #[test]
+    pub fn test_detached_row_data() {
+        let table_schema = table_schema();
+
+        let columns = vec!(
+            col1_data(12345),
+            col2_data(123),
+            col3_data("yo"),
+            col4_data(Some(true))
+        );
+
+        let row = DetachedRowData::assemble(
+            &Arc::new(table_schema),
+            RowFlags::create(true),
+            &columns,
+        ).unwrap();
+
+
+        let row_data = row.row_data_view();
+
+        assert_eq!(row.schema.table_id, row_data.schema.table_id);
+
+        let mut v2 = Vec::new();
+        row_data.write_to(&mut v2).unwrap();
+
+        let mut offs = 0;
+        assert_eq!(v2.decode_varint_usize(&mut offs), row.buf.len());
+        assert_eq!(&row.buf, &&v2[offs..]);
+        assert_eq!(RowFlags::create(true), row_data.flags());
+
+        let mut offs = row_data.offs_start_column_data();
+        let col = row_data.read_col(&mut offs);
+        assert_eq!(col.flags, ColumnFlags::create(false));
+        assert_eq!(col.col_id, 0);
+        assert_eq!(col.value, Some(ColumnValue::BigInt(12345)));
+
+        let col = row_data.read_col(&mut offs);
+        assert_eq!(col.flags, ColumnFlags::create(false));
+        assert_eq!(col.col_id, 33);
+        assert_eq!(col.value, Some(ColumnValue::Int(123)));
+
+        let col = row_data.read_col(&mut offs);
+        assert_eq!(col.flags, ColumnFlags::create(false));
+        assert_eq!(col.col_id, 22);
+        assert_eq!(col.value, Some(ColumnValue::Text("yo")));
+
+        let col = row_data.read_col(&mut offs);
+        assert_eq!(col.flags, ColumnFlags::create(false));
+        assert_eq!(col.col_id, 11);
+        assert_eq!(col.value, Some(ColumnValue::Boolean(true)));
+    }
+
+    #[test]
+    pub fn test_row_data_null_value() {
+        let table_schema = table_schema();
+
+        let row = DetachedRowData::assemble(&Arc::new(table_schema),
+                                            RowFlags::create(false),
+                                            &vec!(col4_data(None)))
+            .unwrap();
+
+        let row_data = row.row_data_view();
+
+        let mut offs = row_data.offs_start_column_data();
+        let col = row_data.read_col(&mut offs);
+        assert_eq!(col.value, None);
+    }
+
+    #[test]
+    pub fn test_compare_by_pk() {
+        fn row(v1: i64, v2: i32, v3: &'static str, v4: Option<bool>) -> DetachedRowData {
+            let table_schema = Arc::new(table_schema());
+            let flags = RowFlags::create(true);
+            DetachedRowData::assemble(&table_schema, flags,
+                                                &vec!(col1_data(v1), col2_data(v2), col3_data(v3), col4_data(v4))
+            ).unwrap()
+        }
+
+        let row0 = row(100, 100, "hi", Some(true));
+
+        let row_greater_1 = row(101, 101, "a", Some(true));
+        let row_less_1 = row(99, 99, "z", Some(true));
+
+        let row_greater_2 = row(100, 99, "a", Some(true));
+        let row_less_2 = row(100, 101, "z", Some(true));
+
+        let row_greater_3 = row(100, 100, "z", Some(true));
+        let row_less_3 = row(100, 100, "a", Some(true));
+
+        let row_regular_different = row(100, 100, "hi", Some(false));
+        let row_regular_different2 = row(100, 100, "hi", None);
+
+        let rd0 = row0.row_data_view();
+
+        let rd_greater_1 = row_greater_1.row_data_view();
+        let rd_less_1 = row_less_1.row_data_view();
+
+        let rd_greater_2 = row_greater_2.row_data_view();
+        let rd_less_2 = row_less_2.row_data_view();
+
+        let rd_greater_3 = row_greater_3.row_data_view();
+        let rd_less_3 = row_less_3.row_data_view();
+
+        let rd_regular_different = row_regular_different.row_data_view();
+        let rd_regular_different2 = row_regular_different2.row_data_view();
+
+        assert_eq!(rd0.compare_by_pk(&rd_greater_1), Ordering::Less);
+        assert_eq!(rd0.compare_by_pk(&rd_less_1), Ordering::Greater);
+
+        assert_eq!(rd0.compare_by_pk(&rd_greater_2), Ordering::Less);
+        assert_eq!(rd0.compare_by_pk(&rd_less_2), Ordering::Greater);
+
+        assert_eq!(rd0.compare_by_pk(&rd_greater_3), Ordering::Less);
+        assert_eq!(rd0.compare_by_pk(&rd_less_3), Ordering::Greater);
+
+        assert_eq!(rd0.compare_by_pk(&rd_regular_different), Ordering::Equal);
+        assert_eq!(rd0.compare_by_pk(&rd_regular_different2), Ordering::Equal);
     }
 }
