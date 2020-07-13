@@ -3,6 +3,7 @@ mod prelude;
 mod primitives;
 mod sstable;
 mod table;
+mod time;
 
 use std::collections::HashMap;
 

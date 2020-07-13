@@ -7,8 +7,7 @@ edition = "2018"
 
 [dependencies]
 env_logger = "0.7"
-log = "0.4"
-
 fasthash = "0.4"
+log = "0.4"
 memmap = "0.7"
 uuid = {version = "0.8", features = ["v1", "v4"]}

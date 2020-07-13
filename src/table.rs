@@ -8,7 +8,6 @@ use std::ptr::NonNull;
 use std::slice::from_raw_parts;
 use std::sync::Arc;
 
-use memmap::{Mmap, MmapOptions};
 use uuid::Uuid;
 
 use crate::prelude::*;
@@ -291,11 +290,6 @@ impl ColumnFlags {
         ColumnFlags { flags }
     }
 
-
-    pub fn with_null(&self) -> ColumnFlags {
-        ColumnFlags { flags: self.flags | ColumnFlags::NULL_VALUE }
-    }
-
     pub fn is_null(&self) -> bool {
         self.flags & ColumnFlags::NULL_VALUE != 0
     }
@@ -323,7 +317,6 @@ mod test {
 
     use uuid::Uuid;
 
-    use crate::prelude::HtError;
     use crate::primitives::DecodePrimitives;
     use crate::table::{ColumnData, ColumnFlags, ColumnSchema, ColumnType, ColumnValue, DetachedRowData, PrimaryKeySpec, RowFlags, TableSchema};
 

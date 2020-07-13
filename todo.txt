@@ -1,10 +1,18 @@
 todo
 ----
 * SsTable features
-  * delete value -> ("row") metadata
+  * timestamps, merge
+
+  * lookup across SsTables
+
+  * delete value -> ("row") tombstones
 
   * compaction
 
   * Bloom filter
   * guard against incompletely written
   * verify consistency -> hash
+
+* how to handle row tombstones + sparse insert?
+  * "row tombstone" means "tombstone underlies this row, values go on top"
+
