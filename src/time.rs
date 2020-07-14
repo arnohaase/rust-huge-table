@@ -1,7 +1,6 @@
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime};
 
-
 /// HtTimestamp holds ticks of a tenth of a nanosecond since 'ht epoch' (midnight Jan 1 2020). It
 ///  can represent only timestamps after that day which is ok since they are used for representing
 ///  times in data items' lifecycle.
@@ -18,7 +17,7 @@ pub struct HtTimestamp {
 }
 
 impl HtTimestamp {
-    const EPOCH_MILLIS: u64 = 24*60*60*(365*50 + 12)*1000;
+    const EPOCH_MILLIS: u64 = 24 * 60 * 60 * (365 * 50 + 12) * 1000;
 
     pub fn new(ticks: u64) -> HtTimestamp {
         HtTimestamp { ticks }
@@ -47,9 +46,9 @@ pub trait TimeTravelCallback {
 }
 
 struct NoTimeTravelCallback {}
+
 impl TimeTravelCallback for NoTimeTravelCallback {
-    fn on_time_travel(&self, _cur_millis: u64, _prev_millis: u64, _new_time_travel_counter: u8) {
-    }
+    fn on_time_travel(&self, _cur_millis: u64, _prev_millis: u64, _new_time_travel_counter: u8) {}
 }
 
 pub struct WallClock {
@@ -79,28 +78,31 @@ impl WallClock {
 
     #[allow(dead_code)]
     pub fn new_without_callback(unique_context: u64, time_travel_counter: u64) -> WallClock {
-        WallClock::new(unique_context, time_travel_counter, Box::new(NoTimeTravelCallback{}))
+        WallClock::new(unique_context, time_travel_counter, Box::new(NoTimeTravelCallback {}))
     }
 }
 
 impl HtClock for WallClock {
     fn now(&self) -> HtTimestamp {
-        let millis = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH)
+        let unix_millis = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
             .expect("'now()' appears to be before 1970-01-01")
-            .as_millis() as u64 - HtTimestamp::EPOCH_MILLIS;
+            .as_millis() as u64;
+
+        assert!(unix_millis >= HtTimestamp::EPOCH_MILLIS, "now() appears to be before 2020-01-01");
+        let millis = unix_millis - HtTimestamp::EPOCH_MILLIS;
 
         let mut lock = self.counter.lock().unwrap();
 
         if millis < lock.cur_epoch_millis {
             // backwards time travel - move to a different 'reality' by incrementing the time travel counter
-            lock.time_travel_counter = (lock.time_travel_counter + 1)%10;
+            lock.time_travel_counter = (lock.time_travel_counter + 1) % 10;
 
             self.time_travel_callback.on_time_travel(millis, lock.cur_epoch_millis, lock.time_travel_counter as u8);
 
             lock.counter = 0;
             lock.cur_epoch_millis = millis;
-        }
-        else {
+        } else {
             let diff_millis = millis - lock.cur_epoch_millis;
 
             if diff_millis != 0 {
@@ -108,8 +110,7 @@ impl HtClock for WallClock {
 
                 if lock.counter < diff_millis * 1000 {
                     lock.counter = 0;
-                }
-                else {
+                } else {
                     lock.counter -= diff_millis * 1000;
                 }
             }
@@ -118,7 +119,7 @@ impl HtClock for WallClock {
         let counter = lock.counter;
         lock.counter += 1;
 
-        let ticks = millis * 10_000_000 + (counter * 10_000) + self.unique_context*10 + lock.time_travel_counter;
+        let ticks = millis * 10_000_000 + (counter * 10_000) + self.unique_context * 10 + lock.time_travel_counter;
         HtTimestamp::new(ticks)
     }
 }
@@ -153,7 +154,7 @@ impl HtClock for ManualClock {
 mod test {
     use std::time::{Duration, SystemTime};
 
-    use crate::time::{HtClock, HtTimestamp, ManualClock, WallClock, NoTimeTravelCallback};
+    use crate::time::{HtClock, HtTimestamp, ManualClock, NoTimeTravelCallback, WallClock};
 
     #[test]
     pub fn test_wallclock_time() {
@@ -167,7 +168,7 @@ mod test {
         let diff1 = SystemTime::now().duration_since(st1).unwrap();
         assert!(diff1 < Duration::from_secs(1));
 
-        let diff2 = st1.duration_since(SystemTime::UNIX_EPOCH).unwrap().as_nanos() - (t1.ticks/10) as u128;
+        let diff2 = st1.duration_since(SystemTime::UNIX_EPOCH).unwrap().as_nanos() - (t1.ticks / 10) as u128;
         assert_eq!(diff2, (HtTimestamp::EPOCH_MILLIS * 1_000_000) as u128);
     }
 
