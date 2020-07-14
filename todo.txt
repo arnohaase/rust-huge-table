@@ -13,6 +13,20 @@ todo
   * guard against incompletely written
   * verify consistency -> hash
 
+* logging
+
 * how to handle row tombstones + sparse insert?
   * "row tombstone" means "tombstone underlies this row, values go on top"
 
+links
+-----
+* https://docs.scylladb.com/architecture/sstable/sstable3/sstables_3_data_file_format/
+* https://issues.apache.org/jira/browse/CASSANDRA-6108 (timeid64)
+* https://issues.apache.org/jira/browse/CASSANDRA-7056 (RAMP transactions)
+* https://issues.apache.org/jira/browse/CASSANDRA-7919 (timeuuid uniqueness)
+
+
+done
+----
+* unique per-server part in timestamps
+* unique timestamps / handle backwards time travel

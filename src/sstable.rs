@@ -125,7 +125,10 @@ mod test {
 
     fn table_config() -> Arc<TableConfig> {
         let base_folder = PathBuf::from(TEST_DIR);
-        std::fs::create_dir(&base_folder);
+        match std::fs::create_dir(&base_folder) {
+            Ok(_) => println!("creating folder {:?}", &base_folder),
+            Err(_) => {}
+        }
 
         Arc::new(TableConfig {
             base_folder
