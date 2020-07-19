@@ -13,6 +13,9 @@ use uuid::Uuid;
 use crate::prelude::*;
 use crate::primitives::*;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ColumnId( pub u32 );
+
 #[derive(Clone, Debug)]
 pub enum ColumnType {
     Boolean,
@@ -23,7 +26,7 @@ pub enum ColumnType {
 
 #[derive(Clone, Debug)]
 pub struct ColumnSchema {
-    pub col_id: u32,
+    pub col_id: ColumnId,
     pub name: String,
     pub tpe: ColumnType,
     pub pk_spec: PrimaryKeySpec,
@@ -70,7 +73,7 @@ impl TableSchema {
         }
     }
 
-    pub fn column(&self, col_id: u32) -> HtResult<&ColumnSchema> {
+    pub fn column(&self, col_id: ColumnId) -> HtResult<&ColumnSchema> {
         match self.columns.iter().find(|c| c.col_id == col_id) {
             Some(c) => Ok(c),
             None => Err(HtError::misc("column not found")),
@@ -126,7 +129,7 @@ impl<'a> RowData<'a> {
     }
 
     /// This is not very efficient and intended for testing and debugging
-    pub fn read_col_by_id(&self, col_id: u32) -> Option<ColumnData> {
+    pub fn read_col_by_id(&self, col_id: ColumnId) -> Option<ColumnData> {
         let mut offs = self.offs_start_column_data();
         while offs < self.buf.len() {
             let candidate = self.read_col(&mut offs);
@@ -138,7 +141,7 @@ impl<'a> RowData<'a> {
     }
 
     fn read_col(&self, offs: &mut usize) -> ColumnData {
-        let col_id = self.buf.decode_varint_u32(offs);
+        let col_id = ColumnId(self.buf.decode_varint_u32(offs));
         let col_flags = ColumnFlags { flags: self.buf[*offs] };
         *offs += 1;
 
@@ -217,7 +220,7 @@ impl DetachedRowData {
         buf.push(row_flags.flags);
 
         for col in columns {
-            buf.encode_varint_u32(col.col_id)?;
+            buf.encode_varint_u32(col.col_id.0)?;
             buf.push(col.flags.flags);
 
             //TODO verify that 'has_full_cluster_key' really means all cluster key columns are present
@@ -296,7 +299,7 @@ impl ColumnFlags {
 }
 
 pub struct ColumnData<'a> {
-    pub col_id: u32,
+    pub col_id: ColumnId,
     pub flags: ColumnFlags,
     pub value: Option<ColumnValue<'a>>,
 }
@@ -318,7 +321,7 @@ mod test {
     use uuid::Uuid;
 
     use crate::primitives::DecodePrimitives;
-    use crate::table::{ColumnData, ColumnFlags, ColumnSchema, ColumnType, ColumnValue, DetachedRowData, PrimaryKeySpec, RowFlags, TableSchema};
+    use crate::table::{ColumnData, ColumnFlags, ColumnSchema, ColumnType, ColumnValue, DetachedRowData, PrimaryKeySpec, RowFlags, TableSchema, ColumnId};
 
     fn table_schema() -> TableSchema {
         TableSchema::new(
@@ -326,25 +329,25 @@ mod test {
             &Uuid::new_v4(),
             vec!(
                 ColumnSchema {
-                    col_id: 0,
+                    col_id: ColumnId(0),
                     name: "part_key".to_string(),
                     tpe: ColumnType::BigInt,
                     pk_spec: PrimaryKeySpec::PartitionKey,
                 },
                 ColumnSchema {
-                    col_id: 33,
+                    col_id: ColumnId(33),
                     name: "cl_key_1".to_string(),
                     tpe: ColumnType::Int,
                     pk_spec: PrimaryKeySpec::ClusterKey(false),
                 },
                 ColumnSchema {
-                    col_id: 22,
+                    col_id: ColumnId(22),
                     name: "cl_key_2".to_string(),
                     tpe: ColumnType::Text,
                     pk_spec: PrimaryKeySpec::ClusterKey(true),
                 },
                 ColumnSchema {
-                    col_id: 11,
+                    col_id: ColumnId(11),
                     name: "regular".to_string(),
                     tpe: ColumnType::Boolean,
                     pk_spec: PrimaryKeySpec::Regular,
@@ -362,17 +365,17 @@ mod test {
             .collect::<Vec<&String>>(),
                    &vec!("part_key", "cl_key_1", "cl_key_2"));
 
-        assert_eq!(table_schema.column(0).unwrap().name, "part_key");
-        assert_eq!(table_schema.column(33).unwrap().name, "cl_key_1");
-        assert_eq!(table_schema.column(22).unwrap().name, "cl_key_2");
-        assert_eq!(table_schema.column(11).unwrap().name, "regular");
+        assert_eq!(table_schema.column(ColumnId(0)).unwrap().name, "part_key");
+        assert_eq!(table_schema.column(ColumnId(33)).unwrap().name, "cl_key_1");
+        assert_eq!(table_schema.column(ColumnId(22)).unwrap().name, "cl_key_2");
+        assert_eq!(table_schema.column(ColumnId(11)).unwrap().name, "regular");
 
-        assert!(table_schema.column(1).is_err());
+        assert!(table_schema.column(ColumnId(1)).is_err());
     }
 
     fn col1_data(v: i64) -> ColumnData<'static> {
         ColumnData {
-            col_id: 0,
+            col_id: ColumnId(0),
             flags: ColumnFlags::create(false),
             value: Some(ColumnValue::BigInt(v)),
         }
@@ -380,7 +383,7 @@ mod test {
 
     fn col2_data(v: i32) -> ColumnData<'static> {
         ColumnData {
-            col_id: 33,
+            col_id: ColumnId(33),
             flags: ColumnFlags::create(false),
             value: Some(ColumnValue::Int(v)),
         }
@@ -388,7 +391,7 @@ mod test {
 
     fn col3_data<'a>(v: &'a str) -> ColumnData<'a> {
         ColumnData {
-            col_id: 22,
+            col_id: ColumnId(22),
             flags: ColumnFlags::create(false),
             value: Some(ColumnValue::Text(v)),
         }
@@ -396,7 +399,7 @@ mod test {
 
     fn col4_data(v: Option<bool>) -> ColumnData<'static> {
         ColumnData {
-            col_id: 11,
+            col_id: ColumnId(11),
             flags: ColumnFlags::create(v.is_none()),
             value: v.map(|b| ColumnValue::Boolean(b)),
         }
@@ -435,22 +438,22 @@ mod test {
         let mut offs = row_data.offs_start_column_data();
         let col = row_data.read_col(&mut offs);
         assert_eq!(col.flags, ColumnFlags::create(false));
-        assert_eq!(col.col_id, 0);
+        assert_eq!(col.col_id, ColumnId(0));
         assert_eq!(col.value, Some(ColumnValue::BigInt(12345)));
 
         let col = row_data.read_col(&mut offs);
         assert_eq!(col.flags, ColumnFlags::create(false));
-        assert_eq!(col.col_id, 33);
+        assert_eq!(col.col_id, ColumnId(33));
         assert_eq!(col.value, Some(ColumnValue::Int(123)));
 
         let col = row_data.read_col(&mut offs);
         assert_eq!(col.flags, ColumnFlags::create(false));
-        assert_eq!(col.col_id, 22);
+        assert_eq!(col.col_id, ColumnId(22));
         assert_eq!(col.value, Some(ColumnValue::Text("yo")));
 
         let col = row_data.read_col(&mut offs);
         assert_eq!(col.flags, ColumnFlags::create(false));
-        assert_eq!(col.col_id, 11);
+        assert_eq!(col.col_id, ColumnId(11));
         assert_eq!(col.value, Some(ColumnValue::Boolean(true)));
     }
 

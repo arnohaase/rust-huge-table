@@ -116,7 +116,7 @@ impl SsTable {
 mod test {
     use crate::sstable::{TableConfig, SsTable};
     use std::sync::Arc;
-    use crate::table::{TableSchema, ColumnSchema, ColumnType, PrimaryKeySpec, ColumnData, DetachedRowData, RowFlags, ColumnFlags, ColumnValue, RowData};
+    use crate::table::{TableSchema, ColumnSchema, ColumnType, PrimaryKeySpec, ColumnData, DetachedRowData, RowFlags, ColumnFlags, ColumnValue, RowData, ColumnId};
     use uuid::Uuid;
     use std::path::PathBuf;
     use crate::primitives::DecodePrimitives;
@@ -138,13 +138,13 @@ mod test {
     fn table_schema() -> Arc<TableSchema> {
         Arc::new(TableSchema::new ("test_table", &Uuid::new_v4(), vec!(
             ColumnSchema {
-                col_id: 0,
+                col_id: ColumnId(0),
                 name: "pk".to_string(),
                 tpe: ColumnType::BigInt,
                 pk_spec: PrimaryKeySpec::PartitionKey
             },
             ColumnSchema {
-                col_id: 1,
+                col_id: ColumnId(1),
                 name: "text".to_string(),
                 tpe: ColumnType::Text,
                 pk_spec: PrimaryKeySpec::Regular
@@ -164,12 +164,12 @@ mod test {
                                       flags,
                                       &vec!(
                                           ColumnData {
-                                              col_id: 0,
+                                              col_id: ColumnId(0),
                                               flags: ColumnFlags::create(false),
                                               value: Some(ColumnValue::BigInt(pk))
                                           },
                                           ColumnData {
-                                              col_id: 1,
+                                              col_id: ColumnId(1),
                                               flags: ColumnFlags::create(text.is_none()),
                                               value: text.map(|t| ColumnValue::Text(t)),
                                           },
@@ -178,13 +178,13 @@ mod test {
         }
 
         fn pk(row: &RowData) -> i64 {
-            match row.read_col_by_id(0).unwrap().value.unwrap() {
+            match row.read_col_by_id(ColumnId(0)).unwrap().value.unwrap() {
                 ColumnValue::BigInt(v) => v,
                 _ => panic!("no pk value")
             }
         }
         fn value<'a>(row: &'a RowData) -> &'a str {
-            match row.read_col_by_id(1).unwrap().value.unwrap() {
+            match row.read_col_by_id(ColumnId(1)).unwrap().value.unwrap() {
                 ColumnValue::Text(v) => v,
                 _ => panic!("no value")
             }
