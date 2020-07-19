@@ -12,6 +12,7 @@ use uuid::Uuid;
 
 use crate::prelude::*;
 use crate::primitives::*;
+use crate::time::{MergeTimestamp, TtlTimestamp};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ColumnId( pub u32 );
@@ -82,7 +83,20 @@ impl TableSchema {
 }
 
 
+//TODO separte tombstone data structures - row, range etc.
+//TODO unit tests for merge timestamp, expiry (row and column level)
+
 /// A wrapper around (and handle to) a byte buffer containing a row's raw data.
+///
+/// row format:
+///   varint<usize>     number of bytes (on disk only, otherwise encoded in the wide pointer)
+///   u8                RowFlags
+///   fixed u64         row timestamp (MergeTimestamp)
+///   opt fixed u32     optional (if TTL row flag is set) row TtlTimestamp
+///   columns:
+///     varint<u32>     column id
+///     u8              ColumnFlags
+///     opt value       format depends on column type; only if 'is null' column flag is not set
 pub struct RowData<'a> {
     pub schema: Arc<TableSchema>,
     pub buf: &'a [u8],
@@ -123,8 +137,20 @@ impl<'a> RowData<'a> {
     //TODO pub fn col_value(&self, col_id: u32) -> ???
 
     pub fn flags(&self) -> RowFlags {
-        RowFlags {
-            flags: self.buf[0]
+        RowFlags (self.buf[0])
+    }
+
+    pub fn timestamp(&self) -> MergeTimestamp {
+        MergeTimestamp::from_ticks(self.buf.decode_fixed_u64(&mut 1))
+    }
+
+    pub fn expiry(&self) -> Option<TtlTimestamp> {
+        if self.flags().has_row_expiry() {
+            let mut offs = 1 + size_of::<u64>();
+            Some(TtlTimestamp::new(self.buf.decode_varint_u32(&mut offs)))
+        }
+        else {
+            None
         }
     }
 
@@ -142,13 +168,24 @@ impl<'a> RowData<'a> {
 
     fn read_col(&self, offs: &mut usize) -> ColumnData {
         let col_id = ColumnId(self.buf.decode_varint_u32(offs));
-        let col_flags = ColumnFlags { flags: self.buf[*offs] };
+        let col_flags = ColumnFlags ( self.buf[*offs] );
         *offs += 1;
+
+        let timestamp = match col_flags.has_timestamp() {
+            true => Some (MergeTimestamp::from_ticks(self.buf.decode_fixed_u64(offs))),
+            false => None,
+        };
+        let expiry = match col_flags.has_expiry() {
+            true => Some (TtlTimestamp::new(self.buf.decode_fixed_u32(offs))),
+            false => None,
+        };
 
         if col_flags.is_null() {
             return ColumnData {
                 col_id,
                 flags: col_flags,
+                timestamp,
+                expiry,
                 value: None,
             };
         }
@@ -163,12 +200,21 @@ impl<'a> RowData<'a> {
         ColumnData {
             col_id,
             flags: col_flags,
+            timestamp,
+            expiry,
             value: Some(col_data),
         }
     }
 
     fn offs_start_column_data(&self) -> usize {
-        1usize
+        let row_flags = RowFlags(self.buf[0]);
+        let mut offs = 1 + size_of::<MergeTimestamp>();
+
+        if row_flags.has_row_expiry() {
+            self.buf.decode_varint_u32(&mut offs);
+        }
+
+        offs
     }
 
     pub fn compare_by_pk(&self, other: &RowData) -> Ordering {
@@ -215,13 +261,22 @@ pub struct DetachedRowData {
 impl DetachedRowData {
     pub fn assemble(schema: &Arc<TableSchema>,
                     row_flags: RowFlags,
+                    timestamp: MergeTimestamp,
+                    expiry: Option<TtlTimestamp>,
                     columns: &Vec<ColumnData>) -> HtResult<DetachedRowData> {
+        assert_eq!(row_flags.has_row_expiry(), expiry.is_some());
+
         let mut buf = Vec::new();
-        buf.push(row_flags.flags);
+        buf.push(row_flags.0);
+        buf.encode_fixed_u64(timestamp.ticks);
+        match expiry {
+            Some(ttl) => buf.encode_fixed_u32(ttl.epoch_seconds)?,
+            None => {}
+        }
 
         for col in columns {
             buf.encode_varint_u32(col.col_id.0)?;
-            buf.push(col.flags.flags);
+            buf.push(col.flags.0);
 
             //TODO verify that 'has_full_cluster_key' really means all cluster key columns are present
             //TODO verify that pk columns go first and are in schema order
@@ -253,54 +308,73 @@ impl DetachedRowData {
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub struct RowFlags {
-    flags: u8,
-}
+pub struct RowFlags (u8);
 
 impl RowFlags {
     const FULL_CLUSTER_KEY: u8 = 1;
+    const HAS_ROW_EXPIRY: u8 = 2;
 
-    pub fn create(has_full_cluster_key: bool) -> RowFlags {
+    pub fn create(has_full_cluster_key: bool, has_row_expiry: bool) -> RowFlags {
         let mut flags = 0;
 
         if has_full_cluster_key {
             flags |= RowFlags::FULL_CLUSTER_KEY;
         }
+        if has_row_expiry {
+            flags |= RowFlags::HAS_ROW_EXPIRY;
+        }
 
-        RowFlags { flags }
+        RowFlags ( flags )
     }
 
     pub fn has_full_cluster_key(&self) -> bool {
-        self.flags & RowFlags::FULL_CLUSTER_KEY != 0
+        self.0 & RowFlags::FULL_CLUSTER_KEY != 0
+    }
+    pub fn has_row_expiry(&self) -> bool {
+        self.0 & RowFlags::HAS_ROW_EXPIRY != 0
     }
 }
 
 #[derive(Debug, Eq, PartialEq)]
-pub struct ColumnFlags {
-    flags: u8,
-}
+pub struct ColumnFlags (u8);
 
 impl ColumnFlags {
     const NULL_VALUE: u8 = 1;
+    const COLUMN_TIMESTAMP: u8 = 2;
+    const COLUMN_EXPIRY: u8 = 4;
 
     #[inline]
-    pub fn create(is_null: bool) -> ColumnFlags {
+    pub fn create(is_null: bool, has_timestamp: bool, has_expiry: bool) -> ColumnFlags {
         let mut flags = 0;
         if is_null {
             flags |= ColumnFlags::NULL_VALUE;
         }
+        if has_timestamp {
+            flags |= ColumnFlags::COLUMN_TIMESTAMP;
+        }
+        if has_expiry {
+            flags |= ColumnFlags::COLUMN_EXPIRY
+        }
 
-        ColumnFlags { flags }
+        ColumnFlags ( flags )
     }
 
     pub fn is_null(&self) -> bool {
-        self.flags & ColumnFlags::NULL_VALUE != 0
+        self.0 & ColumnFlags::NULL_VALUE != 0
+    }
+    pub fn has_timestamp(&self) -> bool {
+        self.0 & ColumnFlags::COLUMN_TIMESTAMP != 0
+    }
+    pub fn has_expiry(&self) -> bool {
+        self.0 & ColumnFlags::COLUMN_EXPIRY != 0
     }
 }
 
 pub struct ColumnData<'a> {
     pub col_id: ColumnId,
     pub flags: ColumnFlags,
+    pub timestamp: Option<MergeTimestamp>,
+    pub expiry: Option<TtlTimestamp>,
     pub value: Option<ColumnValue<'a>>,
 }
 
@@ -322,6 +396,7 @@ mod test {
 
     use crate::primitives::DecodePrimitives;
     use crate::table::{ColumnData, ColumnFlags, ColumnSchema, ColumnType, ColumnValue, DetachedRowData, PrimaryKeySpec, RowFlags, TableSchema, ColumnId};
+    use crate::time::{ManualClock, MergeTimestamp, HtClock};
 
     fn table_schema() -> TableSchema {
         TableSchema::new(
@@ -376,7 +451,9 @@ mod test {
     fn col1_data(v: i64) -> ColumnData<'static> {
         ColumnData {
             col_id: ColumnId(0),
-            flags: ColumnFlags::create(false),
+            flags: ColumnFlags::create(false, false, false),
+            timestamp: None,
+            expiry: None,
             value: Some(ColumnValue::BigInt(v)),
         }
     }
@@ -384,7 +461,9 @@ mod test {
     fn col2_data(v: i32) -> ColumnData<'static> {
         ColumnData {
             col_id: ColumnId(33),
-            flags: ColumnFlags::create(false),
+            flags: ColumnFlags::create(false, false, false),
+            timestamp: None,
+            expiry: None,
             value: Some(ColumnValue::Int(v)),
         }
     }
@@ -392,7 +471,9 @@ mod test {
     fn col3_data<'a>(v: &'a str) -> ColumnData<'a> {
         ColumnData {
             col_id: ColumnId(22),
-            flags: ColumnFlags::create(false),
+            flags: ColumnFlags::create(false, false, false),
+            timestamp: None,
+            expiry: None,
             value: Some(ColumnValue::Text(v)),
         }
     }
@@ -400,7 +481,9 @@ mod test {
     fn col4_data(v: Option<bool>) -> ColumnData<'static> {
         ColumnData {
             col_id: ColumnId(11),
-            flags: ColumnFlags::create(v.is_none()),
+            flags: ColumnFlags::create(v.is_none(), false, false),
+            timestamp: None,
+            expiry: None,
             value: v.map(|b| ColumnValue::Boolean(b)),
         }
     }
@@ -416,9 +499,13 @@ mod test {
             col4_data(Some(true))
         );
 
+        let clock = ManualClock::new(MergeTimestamp::from_ticks(123456789));
+
         let row = DetachedRowData::assemble(
             &Arc::new(table_schema),
-            RowFlags::create(true),
+            RowFlags::create(true, false),
+            clock.now(),
+            None,
             &columns,
         ).unwrap();
 
@@ -433,26 +520,26 @@ mod test {
         let mut offs = 0;
         assert_eq!(v2.decode_varint_usize(&mut offs), row.buf.len());
         assert_eq!(&row.buf, &&v2[offs..]);
-        assert_eq!(RowFlags::create(true), row_data.flags());
+        assert_eq!(RowFlags::create(true, false), row_data.flags());
 
         let mut offs = row_data.offs_start_column_data();
         let col = row_data.read_col(&mut offs);
-        assert_eq!(col.flags, ColumnFlags::create(false));
+        assert_eq!(col.flags, ColumnFlags::create(false, false, false));
         assert_eq!(col.col_id, ColumnId(0));
         assert_eq!(col.value, Some(ColumnValue::BigInt(12345)));
 
         let col = row_data.read_col(&mut offs);
-        assert_eq!(col.flags, ColumnFlags::create(false));
+        assert_eq!(col.flags, ColumnFlags::create(false, false, false));
         assert_eq!(col.col_id, ColumnId(33));
         assert_eq!(col.value, Some(ColumnValue::Int(123)));
 
         let col = row_data.read_col(&mut offs);
-        assert_eq!(col.flags, ColumnFlags::create(false));
+        assert_eq!(col.flags, ColumnFlags::create(false, false, false));
         assert_eq!(col.col_id, ColumnId(22));
         assert_eq!(col.value, Some(ColumnValue::Text("yo")));
 
         let col = row_data.read_col(&mut offs);
-        assert_eq!(col.flags, ColumnFlags::create(false));
+        assert_eq!(col.flags, ColumnFlags::create(false, false, false));
         assert_eq!(col.col_id, ColumnId(11));
         assert_eq!(col.value, Some(ColumnValue::Boolean(true)));
     }
@@ -461,8 +548,12 @@ mod test {
     pub fn test_row_data_null_value() {
         let table_schema = table_schema();
 
+        let clock = ManualClock::new(MergeTimestamp::from_ticks(123456789));
+
         let row = DetachedRowData::assemble(&Arc::new(table_schema),
-                                            RowFlags::create(false),
+                                            RowFlags::create(false, false),
+                                            clock.now(),
+                                            None,
                                             &vec!(col4_data(None)))
             .unwrap();
 
@@ -477,8 +568,12 @@ mod test {
     pub fn test_compare_by_pk() {
         fn row(v1: i64, v2: i32, v3: &'static str, v4: Option<bool>) -> DetachedRowData {
             let table_schema = Arc::new(table_schema());
-            let flags = RowFlags::create(true);
+            let clock = ManualClock::new(MergeTimestamp::from_ticks(123456789));
+
+            let flags = RowFlags::create(true, false);
             DetachedRowData::assemble(&table_schema, flags,
+                                      clock.now(),
+                                      None,
                                       &vec!(col1_data(v1), col2_data(v2), col3_data(v3), col4_data(v4)),
             ).unwrap()
         }

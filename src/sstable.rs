@@ -120,6 +120,7 @@ mod test {
     use uuid::Uuid;
     use std::path::PathBuf;
     use crate::primitives::DecodePrimitives;
+    use crate::time::{ManualClock, MergeTimestamp, HtClock};
 
     const TEST_DIR: &str = "__test__";
 
@@ -159,18 +160,26 @@ mod test {
 
         fn row(pk: i64, text: Option<&'static str>) -> DetachedRowData {
             let table_schema = table_schema();
-            let flags = RowFlags::create(true);
+            let clock = ManualClock::new(MergeTimestamp::from_ticks(123456789));
+
+            let flags = RowFlags::create(true, false);
             DetachedRowData::assemble(&table_schema,
                                       flags,
+                                      clock.now(),
+                                      None,
                                       &vec!(
                                           ColumnData {
                                               col_id: ColumnId(0),
-                                              flags: ColumnFlags::create(false),
+                                              flags: ColumnFlags::create(false, false, false),
+                                              timestamp: None,
+                                              expiry: None,
                                               value: Some(ColumnValue::BigInt(pk))
                                           },
                                           ColumnData {
                                               col_id: ColumnId(1),
-                                              flags: ColumnFlags::create(text.is_none()),
+                                              flags: ColumnFlags::create(text.is_none(), false, false),
+                                              timestamp: None,
+                                              expiry: None,
                                               value: text.map(|t| ColumnValue::Text(t)),
                                           },
                                       ),
