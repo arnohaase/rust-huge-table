@@ -1,22 +1,40 @@
 todo
 ----
-* SsTable features
-  * timestamps, merge
-
+* backbone per node
+  * client API
+  * memtables
+  * transaction log
   * lookup across SsTables
 
-  * delete value -> ("row") tombstones
-
-  * compaction
-
-  * Bloom filter
+* SsTable features
   * guard against incompletely written
   * verify consistency -> hash
+  * tombstones (row, range etc.)
+  * merge / compaction
+  * bloom filter
+  * metadata: oldest / youngest timestamp
+  * more data types: uuid, float
+  * collections (?)
+  * string / UUID / BLOB "reference" for recurring strings (e.g. partition key) (?)
+
+* features
+  * materialized views
+  * RAMP transactions
+  * PAXOS
+  * Batch Statements
+
+* multi-node
+  * replication
+  	* sync
+  	* async
+  	* delayed / unavailable
+  	* read repair (?)
+  * consistency levels
+    * read
+    * write
+  * sharding
 
 * logging
-
-* how to handle row tombstones + sparse insert?
-  * "row tombstone" means "tombstone underlies this row, values go on top"
 
 links
 -----
@@ -30,3 +48,4 @@ done
 ----
 * unique per-server part in timestamps
 * unique timestamps / handle backwards time travel
+* timestamps, expiry (row / column)

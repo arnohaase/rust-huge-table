@@ -233,7 +233,7 @@ impl HtClock for ManualClock {
 mod test {
     use std::time::{Duration, SystemTime};
 
-    use crate::time::{HT_EPOCH_MILLIS, HtClock, ManualClock, MergeTimestamp, NoTimeTravelCallback, WallClock};
+    use crate::time::{HT_EPOCH_MILLIS, HtClock, ManualClock, MergeTimestamp, WallClock};
 
     #[test]
     pub fn test_wallclock_time() {

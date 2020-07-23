@@ -1,4 +1,5 @@
 use std::io::Error;
+use std::cmp::Ordering;
 
 pub type HtResult<T> = std::result::Result<T, HtError>;
 
@@ -19,3 +20,28 @@ impl From<std::io::Error> for HtError {
         HtError::Io(e)
     }
 }
+
+macro_rules! ordered {
+    ($t:ty) => {
+        impl Ord for $t {
+            #[inline]
+            fn cmp(&self, other: &Self) -> Ordering {
+                <$t>::compare(self, other)
+            }
+        }
+        impl PartialOrd for $t {
+            #[inline]
+            fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+                Some(<$t>::compare(self, other))
+            }
+        }
+        impl PartialEq for $t {
+            #[inline]
+            fn eq(&self, other: &Self) -> bool {
+                <$t>::compare(self, other) == Ordering::Equal
+            }
+        }
+        impl Eq for $t {}
+    }
+}
+

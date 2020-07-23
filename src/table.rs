@@ -257,6 +257,14 @@ pub struct DetachedRowData {
     schema: Arc<TableSchema>,
     buf: Vec<u8>,
 }
+impl DetachedRowData {
+    fn compare(a: &DetachedRowData, b: &DetachedRowData) -> Ordering {
+        a.row_data_view().compare_by_pk(&b.row_data_view())
+    }
+}
+
+ordered!(DetachedRowData);
+
 
 impl DetachedRowData {
     pub fn assemble(schema: &Arc<TableSchema>,
@@ -306,6 +314,24 @@ impl DetachedRowData {
         RowData::from_view(&self.schema, &self.buf)
     }
 }
+
+// impl PartialEq for DetachedRowData {
+//     fn eq(&self, other: &Self) -> bool {
+//         unimplemented!()
+//     }
+// }
+
+// impl PartialOrd for DetachedRowData {
+//     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+//         unimplemented!()
+//     }
+// }
+
+// impl FullyOrdered for DetachedRowData {
+//     fn cmp(&self, other: &Self) -> Ordering {
+//         unimplemented!()
+//     }
+// }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct RowFlags (u8);

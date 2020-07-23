@@ -1,5 +1,7 @@
-// mod attic;
+#[macro_use]
 mod prelude;
+
+mod memtable;
 mod primitives;
 mod sstable;
 mod table;
