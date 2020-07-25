@@ -6,7 +6,15 @@ use std::ops::{Deref, Index};
 use std::slice::SliceIndex;
 
 
+pub trait EncodeDecode {
+    fn encode<W>(w: &mut W) -> std::io::Result<()> where W: Write;
+    fn decode(buf: &[u8], offs: &mut u64) -> Self;
+}
+
+
 pub trait EncodePrimitives {
+    fn encode_u8(&mut self, value: u8) -> std::io::Result<()>;
+
     fn encode_varint_u64(&mut self, value: u64) -> std::io::Result<()>;
     fn encode_varint_u32(&mut self, value: u32) -> std::io::Result<()>;
     fn encode_varint_usize(&mut self, value: usize) -> std::io::Result<()>;
@@ -38,6 +46,11 @@ pub trait EncodePrimitives {
 }
 
 impl <W> EncodePrimitives for W where W: Write {
+    fn encode_u8(&mut self, value: u8) -> std::io::Result<()> {
+        self.write_all(&[value])
+    }
+
+
     fn encode_varint_u64(&mut self, mut value: u64) -> std::io::Result<()> {
         while value >= 0x80 {
             self.write_all(&[((value & 0x7F) | 0x80) as u8])?;
@@ -77,7 +90,6 @@ impl <W> EncodePrimitives for W where W: Write {
         let ptr = &value_le as *const u32 as *const u8;
         self.write_all(unsafe { std::slice::from_raw_parts(ptr, size_of::<u32>()) })
     }
-
     fn encode_fixed_f32(&mut self, value: f32) -> std::io::Result<()> {
         self.write_all(&value.to_le_bytes())
     }
@@ -93,8 +105,9 @@ impl <W> EncodePrimitives for W where W: Write {
     }
 }
 
-
 pub trait DecodePrimitives {
+    fn decode_u8(&self, offs: &mut usize) -> u8;
+
     fn decode_varint_u64(&self, offs: &mut usize) -> u64;
     fn decode_varint_u32(&self, offs: &mut usize) -> u32;
     fn decode_varint_usize(&self, offs: &mut usize) -> usize;
@@ -130,6 +143,12 @@ pub trait DecodePrimitives {
 
 
 impl <D> DecodePrimitives for D where D: Deref<Target=[u8]> {
+    fn decode_u8(&self, offs: &mut usize) -> u8 {
+        let result = self[*offs];
+        *offs += 1;
+        result
+    }
+
     //TODO fn check_capacity(&self, )
 
     fn decode_varint_u64(&self, offs: &mut usize) -> u64 {
@@ -235,6 +254,19 @@ impl <D> DecodePrimitives for D where D: Deref<Target=[u8]> {
 #[cfg(test)]
 mod test {
     use crate::primitives::{EncodePrimitives, DecodePrimitives};
+
+    #[test]
+    pub fn test_u8() {
+        let mut v = Vec::new();
+
+        v.encode_u8(1).unwrap();
+        v.encode_u8(253).unwrap();
+        v.encode_u8(0).unwrap();
+        v.encode_u8(7).unwrap();
+
+        let v = v;
+        assert_eq!(v, &[1, 253, 0, 7]);
+    }
 
     #[test]
     pub fn test_bool() {
