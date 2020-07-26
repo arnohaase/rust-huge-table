@@ -6,9 +6,11 @@ use std::ops::{Deref, Index};
 use std::slice::SliceIndex;
 
 
-pub trait EncodeDecode {
-    fn encode<W>(w: &mut W) -> std::io::Result<()> where W: Write;
-    fn decode(buf: &[u8], offs: &mut u64) -> Self;
+pub trait Encode<T> {
+    fn encode(&mut self, value: T) -> std::io::Result<()>;
+}
+pub trait Decode<T> {
+    fn decode(&self, offs: &mut usize) -> T;
 }
 
 

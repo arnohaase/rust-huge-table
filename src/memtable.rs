@@ -13,14 +13,20 @@ pub struct MemTable {
 
 impl MemTable {
     pub fn new(config: &Arc<TableConfig>, schema: &Arc<TableSchema>) -> MemTable {
-        let data = BTreeSet::new();
-
-
         MemTable {
             config: config.clone(),
             schema: schema.clone(),
-            data,
+            data: BTreeSet::new(),
             size: 0
         }
+    }
+
+    pub fn add(&mut self, row: DetachedRowData) {
+        match self.data.take(&row) {
+            None => self.data.insert(row),
+            Some(prev) => {
+                self.data.insert(row.merge(&prev.row_data_view()))
+            }
+        };
     }
 }

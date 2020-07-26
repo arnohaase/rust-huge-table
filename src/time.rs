@@ -1,5 +1,7 @@
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime};
+use std::io::Write;
+use crate::primitives::*;
 
 /// MergeTimestamp is a globally unique value that is pretty much ordered by wall clock time (but
 ///  obviously not guaranteed to be since it works in a distributed system without central
@@ -31,7 +33,7 @@ use std::time::{Duration, SystemTime};
 ///  is far too small to avoid collisions globally in a reliable way. Creating them uniquely
 ///  is pretty complex and involves _persisting_ unique context and time travel part across
 ///  application restarts. A single WallClock instance should be shared across an entire node.
-#[derive(Copy, Clone, PartialOrd, Ord, Eq, PartialEq, Debug)]
+#[derive(Copy, Clone, PartialOrd, Ord, Eq, PartialEq, Debug, Hash)]
 pub struct MergeTimestamp {
     pub ticks: u64
 }
@@ -77,7 +79,19 @@ impl MergeTimestamp {
     }
 }
 
-#[derive(Copy, Clone, PartialOrd, PartialEq, Ord, Eq, Debug)]
+impl <W> Encode<MergeTimestamp> for W where W: Write {
+    fn encode(&mut self, v: MergeTimestamp) -> std::io::Result<()> {
+        self.encode_fixed_u64(v.ticks)
+    }
+}
+impl Decode<MergeTimestamp> for &[u8] {
+    fn decode(&self, offs: &mut usize) -> MergeTimestamp {
+        MergeTimestamp::from_ticks(self.decode_fixed_u64(offs))
+    }
+}
+
+
+#[derive(Copy, Clone, PartialOrd, PartialEq, Ord, Eq, Debug, Hash)]
 pub struct TtlTimestamp {
     pub epoch_seconds: u32
 }
@@ -91,6 +105,17 @@ impl TtlTimestamp {
         SystemTime::UNIX_EPOCH
             + Duration::from_secs(HT_EPOCH_SECONDS)
             + Duration::from_secs(self.epoch_seconds as u64)
+    }
+}
+
+impl <W> Encode<TtlTimestamp> for W where W: Write {
+    fn encode(&mut self, v: TtlTimestamp) -> std::io::Result<()> {
+        self.encode_fixed_u32(v.epoch_seconds)
+    }
+}
+impl Decode<TtlTimestamp> for &[u8] {
+    fn decode(&self, offs: &mut usize) -> TtlTimestamp {
+        TtlTimestamp::new(self.decode_fixed_u32(offs))
     }
 }
 

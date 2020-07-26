@@ -162,28 +162,12 @@ mod test {
             let table_schema = table_schema();
             let clock = ManualClock::new(MergeTimestamp::from_ticks(123456789));
 
-            let flags = RowFlags::create(true, false);
             DetachedRowData::assemble(&table_schema,
-                                      flags,
-                                      clock.now(),
-                                      None,
                                       &vec!(
-                                          ColumnData {
-                                              col_id: ColumnId(0),
-                                              flags: ColumnFlags::create(false, false, false),
-                                              timestamp: None,
-                                              expiry: None,
-                                              value: Some(ColumnValue::BigInt(pk))
-                                          },
-                                          ColumnData {
-                                              col_id: ColumnId(1),
-                                              flags: ColumnFlags::create(text.is_none(), false, false),
-                                              timestamp: None,
-                                              expiry: None,
-                                              value: text.map(|t| ColumnValue::Text(t)),
-                                          },
+                                          ColumnData::new (ColumnId(0),clock.now(),None,Some(ColumnValue::BigInt(pk))),
+                                          ColumnData::new (ColumnId(1), clock.now(), None, text.map(|t| ColumnValue::Text(t))),
                                       ),
-            ).unwrap()
+            )
         }
 
         fn pk(row: &RowData) -> i64 {
