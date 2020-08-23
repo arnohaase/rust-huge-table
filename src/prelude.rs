@@ -1,5 +1,4 @@
 use std::io::Error;
-use std::cmp::Ordering;
 
 pub type HtResult<T> = std::result::Result<T, HtError>;
 

@@ -6,6 +6,7 @@ mod primitives;
 mod sstable;
 mod table;
 mod time;
+mod tombstones;
 
 use std::collections::HashMap;
 

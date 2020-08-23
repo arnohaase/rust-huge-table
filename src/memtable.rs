@@ -8,7 +8,7 @@ pub struct MemTable {
     config: Arc<TableConfig>,
     schema: Arc<TableSchema>,
     data: BTreeSet<DetachedRowData>,
-    size: u64,
+    size: usize,
 }
 
 impl MemTable {
@@ -22,11 +22,15 @@ impl MemTable {
     }
 
     pub fn add(&mut self, row: DetachedRowData) {
-        match self.data.take(&row) {
-            None => self.data.insert(row),
+        let to_be_added = match self.data.take(&row) {
+            None => row,
             Some(prev) => {
-                self.data.insert(row.merge(&prev.row_data_view()))
-            }
+                self.size -= prev.row_data_view().buf.len();
+                row.row_data_view().merge(&prev.row_data_view())
+            },
         };
+
+        self.size += &to_be_added.row_data_view().buf.len();
+        assert!(self.data.insert(to_be_added));
     }
 }

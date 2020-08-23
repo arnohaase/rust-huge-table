@@ -1,9 +1,7 @@
 use std::io::{Write};
 use std::mem::size_of;
 use std::convert::TryInto;
-use memmap::Mmap;
-use std::ops::{Deref, Index};
-use std::slice::SliceIndex;
+use std::ops::Deref;
 
 
 pub trait Encode<T> {

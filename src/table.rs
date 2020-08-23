@@ -1,11 +1,7 @@
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, HashMap};
-use std::fs::{File, OpenOptions};
-use std::io::{Seek, SeekFrom, Write};
+use std::collections::HashMap;
+use std::io::Write;
 use std::mem::size_of;
-use std::path::PathBuf;
-use std::ptr::NonNull;
-use std::slice::from_raw_parts;
 use std::sync::Arc;
 
 use uuid::Uuid;
@@ -31,7 +27,7 @@ impl Decode<ColumnId> for &[u8] {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ColumnType {
     Boolean,
     Int,
@@ -39,7 +35,7 @@ pub enum ColumnType {
     Text,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ColumnSchema {
     pub col_id: ColumnId,
     pub name: String,
@@ -57,14 +53,14 @@ impl ColumnSchema {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PrimaryKeySpec {
     PartitionKey,
     ClusterKey(bool),
     Regular,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct TableSchema {
     pub name: String,
     pub table_id: Uuid,
@@ -97,11 +93,10 @@ impl TableSchema {
 }
 
 
-//TODO separte tombstone data structures - row, range etc.
+//TODO separate tombstone data structures - row, range etc.
 //TODO unit tests for merge timestamp, expiry (row and column level)
 
 
-//TODO row tombstone
 //TODO u64 as a bitset for 'present columns', col_id as u8
 
 
@@ -109,13 +104,13 @@ impl TableSchema {
 ///
 /// row format:
 ///   varint<usize>     number of bytes (on disk only, otherwise encoded in the wide pointer)
-///   u8                RowFlags
+///   u8                RowFlags.
 ///   fixed u64         row timestamp (MergeTimestamp). We treat an empty row (i.e. all non-pk
 ///                      columns are NULL) as non-existent, so rows need no inherent merge
-///                      timestamp, and this timestamp has no inherent meaning. Columns however
-///                      can reference this timestamp (ColumnFlags::COLUMN_TIMESTAMP), saving
-///                      storage in the frequent case that several columns in a row share the same
-///                      timestamp
+///                      timestamp, and this timestamp has no inherent meaning. Columns however can
+///                      reference this timestamp
+///                      (ColumnFlags::COLUMN_TIMESTAMP), saving storage in the frequent case that
+///                      several columns in a row share the same timestamp.
 ///   opt fixed u32     optional (if TTL row flag is set) row TtlTimestamp. We treat empty rows
 ///                      as non-existent, so there is no inherent concept of 'row TTL', but for
 ///                      the frequent case that several / all columns in a row share the same TTL,
@@ -276,18 +271,95 @@ impl<'a> RowData<'a> {
         Ordering::Equal
     }
 
+    pub fn columns(&'a self) -> RowColumnIter<'a> {
+        RowColumnIter { row: &self, offs: 0 }
+    }
+
     pub fn merge(&self, other: &RowData) -> DetachedRowData {
-        // assert_eq!(self.schema, other.schema);
+        assert_eq!(self.schema, other.schema);
 
+        let self_columns = &mut self.columns();
+        let other_columns = &mut other.columns();
 
-        // DetachedRowData::assemble(
-        //     &self.schema.clone(),
-        //     timestamp,
-        //     expiry,
-        //     columns
-        // )
+        let mut cur_self = self_columns.next();
+        let mut cur_other = other_columns.next();
 
-        unimplemented!()
+        let mut columns = Vec::new();
+
+        loop {
+            match (&cur_self, &cur_other) {
+                (Some(s), Some(o)) => {
+                    if s.col_id < o.col_id {
+                        columns.push(cur_self.unwrap());
+                        cur_self = self_columns.next();
+                    }
+                    else if o.col_id < s.col_id {
+                        columns.push(cur_other.unwrap());
+                        cur_other = other_columns.next();
+                    }
+                    else {
+                        if s.timestamp > o.timestamp {
+                            columns.push(cur_self.unwrap());
+                        }
+                        else {
+                            columns.push(cur_other.unwrap());
+                        }
+                        cur_self = self_columns.next();
+                        cur_other = other_columns.next();
+                    }
+                },
+                (Some(_), None) => {
+                    while cur_self.is_some() {
+                        columns.push(cur_self.unwrap());
+                        cur_self = self_columns.next();
+                    }
+                    break;
+                },
+                (None, Some(_)) => {
+                    while cur_other.is_some() {
+                        columns.push(cur_other.unwrap());
+                        cur_other = other_columns.next();
+                    }
+                    break;
+                }
+                _ => {
+                    break;
+                }
+            }
+        }
+
+        DetachedRowData::assemble(
+            &self.schema.clone(),
+            &columns
+        )
+    }
+}
+
+pub struct RowColumnIter<'a> {
+    row: &'a RowData<'a>,
+    offs: usize,
+}
+
+impl <'a> RowColumnIter<'a> {
+    pub fn new(row: &'a RowData<'a>) -> RowColumnIter<'a> {
+        let offs = row.offs_start_column_data();
+        RowColumnIter {
+            row,
+            offs
+        }
+    }
+}
+
+impl <'a> Iterator for RowColumnIter<'a> {
+    type Item = ColumnData<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.offs >= self.row.buf.len() {
+            None
+        }
+        else {
+            Some(self.row.read_col(self.row.timestamp(), self.row.expiry(), &mut self.offs))
+        }
     }
 }
 
@@ -301,11 +373,6 @@ ordered!(DetachedRowData);
 impl DetachedRowData {
     fn compare(a: &DetachedRowData, b: &DetachedRowData) -> Ordering {
         a.row_data_view().compare_by_pk(&b.row_data_view())
-    }
-
-    //TODO optimized versions that take ownership of 'self' and 'other', being able to return one of them 'as is'?
-    pub fn merge(&self, other: &RowData) -> DetachedRowData {
-        self.row_data_view().merge(other)
     }
 
     fn most_frequent_timestamp(columns: &Vec<ColumnData>) -> MergeTimestamp {
@@ -350,7 +417,7 @@ impl DetachedRowData {
             col.expiry.is_some() && col.expiry == row_expiry,
         );
 
-        buf.encode(col_flags);
+        buf.encode(col_flags).expect("error writing Vec<u8>");
 
         if col.timestamp != row_timestamp {
             buf.encode(col.timestamp).expect("error writing Vec<u8>");
@@ -373,10 +440,10 @@ impl DetachedRowData {
         let row_flags = RowFlags::create(row_expiry.is_some());
 
         let mut buf = Vec::new();
-        buf.encode(row_flags);
+        buf.encode(row_flags).expect("error writing Vec<u8>");
 
         let timestamp = DetachedRowData::most_frequent_timestamp(columns);
-        buf.encode(timestamp);
+        buf.encode(timestamp).expect("error writing Vec<u8>");
 
         match row_expiry {
             Some(ttl) => buf.encode(ttl).expect("error writing Vec<u8>"),
@@ -413,7 +480,6 @@ impl RowFlags {
         if has_row_expiry {
             flags |= RowFlags::ROW_EXPIRY;
         }
-
         RowFlags ( flags )
     }
 
@@ -511,6 +577,7 @@ impl Decode<ColumnFlags> for &[u8] {
 
 /// This is the logical representation of a column's data in a row. It holds a similar but
 ///  different data structure from a RowData's raw buffer, resolving some storage optimizations
+#[derive(Eq, PartialEq)]
 pub struct ColumnData<'a> {
     pub col_id: ColumnId,
     pub timestamp: MergeTimestamp,
@@ -526,6 +593,10 @@ impl<'a> ColumnData<'a> {
 
     pub fn merge<'b>(col1: ColumnData<'b>, col2: ColumnData<'b>) -> ColumnData<'b> {
         assert_eq!(col1.col_id, col2.col_id);
+
+        // this basically asserts that merge timestamps are globally unique
+        assert!(col1.timestamp != col2.timestamp || col1 == col2);
+
         if col1.timestamp > col2.timestamp {
             col1
         }
@@ -552,7 +623,7 @@ mod test {
     use uuid::Uuid;
 
     use crate::primitives::DecodePrimitives;
-    use crate::table::{ColumnData, ColumnFlags, ColumnSchema, ColumnType, ColumnValue, DetachedRowData, PrimaryKeySpec, RowFlags, TableSchema, ColumnId};
+    use crate::table::{ColumnData, ColumnSchema, ColumnType, ColumnValue, DetachedRowData, PrimaryKeySpec, RowFlags, TableSchema, ColumnId};
     use crate::time::{ManualClock, MergeTimestamp, HtClock};
 
     fn table_schema() -> TableSchema {
@@ -716,7 +787,6 @@ mod test {
             let table_schema = Arc::new(table_schema());
             let clock = ManualClock::new(MergeTimestamp::from_ticks(123456789));
 
-            let flags = RowFlags::create(false);
             DetachedRowData::assemble(&table_schema,&vec!(
                 col1_data(clock.now(), v1),
                 col2_data(clock.now(), v2),

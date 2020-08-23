@@ -1,5 +1,4 @@
 use std::cmp::Ordering;
-use std::collections::BTreeMap;
 use std::fs::{File, OpenOptions};
 use std::io::{Seek, SeekFrom, Write};
 use std::mem::size_of;
@@ -8,7 +7,6 @@ use std::slice::from_raw_parts;
 use std::sync::Arc;
 
 use memmap::{Mmap, MmapOptions};
-use uuid::Uuid;
 
 use crate::prelude::*;
 use crate::primitives::*;
@@ -116,10 +114,9 @@ impl SsTable {
 mod test {
     use crate::sstable::{TableConfig, SsTable};
     use std::sync::Arc;
-    use crate::table::{TableSchema, ColumnSchema, ColumnType, PrimaryKeySpec, ColumnData, DetachedRowData, RowFlags, ColumnFlags, ColumnValue, RowData, ColumnId};
+    use crate::table::{TableSchema, ColumnSchema, ColumnType, PrimaryKeySpec, ColumnData, DetachedRowData, ColumnValue, RowData, ColumnId};
     use uuid::Uuid;
     use std::path::PathBuf;
-    use crate::primitives::DecodePrimitives;
     use crate::time::{ManualClock, MergeTimestamp, HtClock};
 
     const TEST_DIR: &str = "__test__";
