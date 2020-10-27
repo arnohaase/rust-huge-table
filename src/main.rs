@@ -1,12 +1,16 @@
 #[macro_use]
 mod prelude;
 
+mod config;
 mod memtable;
 mod primitives;
 mod sstable;
 mod table;
 mod time;
 mod tombstones;
+
+#[cfg(test)]
+mod testutils;
 
 use std::collections::HashMap;
 

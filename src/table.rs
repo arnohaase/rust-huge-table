@@ -835,4 +835,9 @@ mod test {
         assert_eq!(rd0.compare_by_pk(&rd_regular_different), Ordering::Equal);
         assert_eq!(rd0.compare_by_pk(&rd_regular_different2), Ordering::Equal);
     }
+
+    #[test]
+    pub fn test_merge_rows() {
+        panic!("todo")
+    }
 }
